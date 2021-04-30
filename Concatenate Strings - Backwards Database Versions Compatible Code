@@ -1,0 +1,134 @@
+--PFA the code to CONCAT and join multiple RX codes.
+/*****************TABLES WITH VALUES*****************/
+USE [NetworkHealthApplications]
+/****** Object:  Table [dbo].[RX_Codes]    Script Date: 4/27/2021 2:34:53 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE TABLE [dbo].[RX_Codes](
+       [RX_Code] [char](20) NULL,
+       [Description] [char](50) NULL
+) ON [PRIMARY]
+GO
+INSERT [dbo].[RX_Codes] ([RX_Code], [Description]) VALUES (N'AAX                 ', N'Clinic Visit                                      ')
+INSERT [dbo].[RX_Codes] ([RX_Code], [Description]) VALUES (N'ARC                 ', N'Dental Exam                                       ')
+INSERT [dbo].[RX_Codes] ([RX_Code], [Description]) VALUES (N'ERC                 ', N'Ear Exam                                          ')
+INSERT [dbo].[RX_Codes] ([RX_Code], [Description]) VALUES (N'HMC                 ', N'Home Vist                                         ')
+INSERT [dbo].[RX_Codes] ([RX_Code], [Description]) VALUES (N'TKC                 ', N'X Ray                                             ')
+INSERT [dbo].[RX_Codes] ([RX_Code], [Description]) VALUES (N'XRC                 ', N'Chest Exam                                        ')
+GO
+
+
+/****** Object:  Table [dbo].[Live_RX_data]    Script Date: 4/27/2021 2:34:53 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE TABLE [dbo].[Live_RX_data](
+       [RX_Code] [char](20) NULL,
+       [Description] [char](50) NULL
+) ON [PRIMARY]
+GO
+INSERT [dbo].[Live_RX_data] ([RX_Code], [Description]) VALUES (N' AAX                ', N'                                                  ')
+INSERT [dbo].[Live_RX_data] ([RX_Code], [Description]) VALUES (N'ARC:ERC:TKC         ', NULL)
+INSERT [dbo].[Live_RX_data] ([RX_Code], [Description]) VALUES (N'XRC:HMC             ', NULL)
+INSERT [dbo].[Live_RX_data] ([RX_Code], [Description]) VALUES (N'TKC:XRC             ', NULL)
+GO
+
+--drop table [dbo].[RX_Codes]
+--drop table [dbo].[Live_RX_data]
+select * from [dbo].[RX_Codes]
+select * from [dbo].[Live_RX_data]
+/********************CODE*****************************/
+
+IF OBJECT_ID('tempdb..#RXCodeTempTable') IS NOT NULL
+begin
+drop table #RXCodeTempTable
+end
+
+CREATE TABLE #RXCodeTempTable
+( 
+RXCodeID int not null IDENTITY (1,1), 
+RX_Code char(20),
+Description char(50),
+)
+
+Insert into #RXCodeTempTable
+Select * from [dbo].[Live_RX_data]
+where LTRIM(RTRIM(RX_Code)) Like '%:%'
+
+select * from #RXCodeTempTable
+
+DECLARE @delimiter char(255) = ':';
+
+Select RX_Code from #RXCodeTempTable;
+
+-- Split RX codes into multiple rows
+IF OBJECT_ID('tempdb..#SpiltRXCodeTempTable') IS NOT NULL
+begin
+drop table #SpiltRXCodeTempTable
+end
+
+CREATE TABLE #SpiltRXCodeTempTable
+( 
+RXCodeID int, 
+RX_Code char(20),
+Description char(50),
+)
+
+--select * from  #RXCodeTempTable
+
+-- split RX codes into mutiple lines for the same member
+
+Declare @rxtable TABLE ( ID int, RX_CODE CHAR(50),Description Char(100))
+INSERT INTO @rxtable
+Select RXCodeID,LTRIM(RTRIM(RX_Code)) as RX_Code,
+Description from #RXCodeTempTable;
+
+WITH CTE
+AS
+(
+SELECT ID,
+	   [xml_val] = CAST('<t>' + REPLACE(RX_CODE,':','</t><t>')+'</t>' as xml),
+	   Description
+From   @rxtable
+)
+
+Insert into #SpiltRXCodeTempTable 
+Select ID, 
+ RX_CODE = col.value('.','VARCHAR(100)'),
+ Description
+ FROM CTE
+ CROSS APPLY [xml_val].nodes('/t')CA(Col)
+ 
+ Select * from #SpiltRXCodeTempTable 
+
+-- Database Version > 130 code // this piece of code will work i.e only on the sql m - series servers
+--Insert into #SpiltRXCodeTempTable 
+--SELECT RXCodeID, LTRIM(RTRIM(value)) as RX_Code_Split,Description FROM #RXCodeTempTable
+--CROSS APPLY STRING_SPLIT (ltRIM(rtrim(RX_Code)),':')
+--Insert into #SpiltRXCodeTempTable 
+--Select RXCodeID,LTRIM(RTRIM(RX_Code)) as RX_Code,
+--Description from #RXCodeTempTable
+
+Update Split_RX
+Set Description = RX.Description
+--select *
+from #SpiltRXCodeTempTable Split_RX
+inner join [dbo].[RX_Codes] as RX
+on Split_RX.RX_Code = RX.[RX_Code]
+
+-- Update the Description for the RX Code And Insert into your main working temp table
+select RxCodeId
+,RX_Codes = STUFF((SELECT DISTINCT ':' + LTRIM(RTRIM(RX_Code))
+           FROM #SpiltRXCodeTempTable b 
+           WHERE b.RXCodeID = a.RXCodeID
+          FOR XML PATH('')), 1, 1, '')
+
+,Description =  STUFF((SELECT DISTINCT ',' + LTRIM(RTRIM(Description))
+           FROM #SpiltRXCodeTempTable b 
+           WHERE b.RXCodeID = a.RXCodeID
+          FOR XML PATH('')), 1, 1, '')
+FROM #SpiltRXCodeTempTable a
+GROUP BY RXCodeID
