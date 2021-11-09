@@ -1,0 +1,24 @@
+var directory = new DirectoryInfo(Dts.Variables["User::FolderPath"].Value.ToString());
+            FileInfo[] files = directory.GetFiles();
+            DateTime lastModified = DateTime.MinValue;
+            string filename="";
+      //Get the lastest file name
+            foreach (FileInfo file in files)
+            {
+                if (file.LastWriteTime > lastModified)
+                {
+                    lastModified = file.LastWriteTime;
+                    filename = file.Name;
+                    //MessageBox.Show(filename);
+                }
+            }
+      //Delete all old files except latest one.
+            foreach (FileInfo file in files)
+            {      
+                   // MessageBox.Show(filename);
+                    if (file.Name !=filename)
+                    {
+                        file.Delete();
+                    }
+               
+            }
