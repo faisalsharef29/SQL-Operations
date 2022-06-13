@@ -1,0 +1,198 @@
+USE [Development]
+GO
+/****** Object:  StoredProcedure [dbo].[UpdateFilePaths]    Script Date: 6/13/2022 6:31:25 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+-- =============================================
+-- Author:		Name
+-- Create date: 
+-- Description:	
+-- =============================================
+ALTER PROCEDURE [dbo].[UpdateFilePaths] 
+
+AS
+BEGIN
+	-- SET NOCOUNT ON added to prevent extra result sets from
+	-- interfering with SELECT statements.
+	SET NOCOUNT ON;
+
+	Declare
+	@DeploymentWorkflowId int, 
+	@Createdby varchar(50)
+
+	Set @Createdby = 'thp\fs4842'
+	Set @DeploymentWorkflowId = 3
+
+
+IF OBJECT_ID('tempdb..#TempTable1') IS NOT NULL DROP Table #TempTable1
+ 
+begin
+
+WITH Hierarchy(ChildId, ChildName, ParentId, Parents )
+AS
+(
+    SELECT Id, Text, Parent, CAST('' AS VARCHAR(MAX))
+        FROM [dbo].[ConfigLoader_TreeViewNodes] AS FirtGeneration
+        WHERE  [Parent] = 0   
+    UNION ALL
+    SELECT NextGeneration.Id, NextGeneration.Text, Parent.ChildId,
+    CAST(CASE WHEN Parent.Parents = '0'
+        THEN(CAST(NextGeneration.Parent AS VARCHAR(MAX)))
+        ELSE(Parent.Parents + '\' + CAST(NextGeneration.Text AS VARCHAR(MAX)))
+    END AS VARCHAR(MAX))
+        FROM [dbo].[ConfigLoader_TreeViewNodes] AS NextGeneration
+        INNER JOIN Hierarchy AS Parent ON NextGeneration.Parent = Parent.ChildId    
+)
+SELECT ChildId as id , ChildName as Text, ParentId as Parent, Parents as PathToFile  
+,CAST(NULL AS VARCHAR(255)) as CRNumber -- CR Number 
+,CAST(NULL AS VARCHAR(255)) as ContractFolderType -- CR Number 
+into #TempTable1
+FROM Hierarchy 
+--where Parents Like '%.hrl%'
+OPTION(MAXRECURSION 32767)
+
+
+-- Get The CR numbers 
+ --select * from #TempTable1
+ --select * from #TempTable2
+--- Select records with CR number 
+
+IF OBJECT_ID('tempdb..#TempTable2') IS NOT NULL DROP Table #TempTable2
+-- Get CR Numbers in temp table 2
+Select id,Text,Parent ,PathToFile, substring(PathToFile,(CHARINDEX('\',PathToFile)+1), (CHARINDEX('\',SUBSTRING(PathToFile,CHARINDEX('\',PathToFile)+1,LEN(PathToFile)) ) -1)) as CRNumber into #TempTable2 from #TempTable1 
+where PathToFile 
+like '%.txt'
+
+-- Update CR Numbers in temp table
+Update  T1 
+set T1.CRNumber = T2.CRNumber 
+--Select T1.*
+From #TempTable1 T1
+inner join #TempTable2 T2
+on T1.id = T2.id
+where T2.CRNumber !='' or T2.CRNumber is not null
+
+
+-- Get Contract Folder Names in temp Table
+
+IF OBJECT_ID('tempdb..#ContractFolderType') IS NOT NULL DROP Table #ContractFolderType
+--Select * ,CAST(NULL AS VARCHAR(255)) as ContractFolderName
+--into #ContractFolderType
+--from #TempTable1
+--where CRNumber is not null
+
+-- Reverse file path to capture first and second slash occurence
+Update #TempTable1
+Set PathToFile = REVERSE(PathToFile)
+
+select  id,(PathToFile)       as [OriginalData]
+ 	  ,charindex('\', PathToFile, charindex('\', PathToFile, 0)) as [FirstSlash]
+      ,charindex('\', PathToFile, charindex('\', PathToFile, 0)+1) as [SecondSlash]
+      ,charindex('\', PathToFile, charindex('\', PathToFile, charindex('\', PathToFile, 0)+1)+1)  as [ThirdSlash]
+ 	  ,Reverse(SUBSTRING(PathToFile    -- Value
+      , charindex('\', PathToFile, charindex('\', PathToFile, 0)+1)+1  -- Startpoint (SecondSlash) + 1
+      , charindex('\', PathToFile, charindex('\', PathToFile, charindex('\', PathToFile, 0)+1)+1) - charindex('\', PathToFile, charindex('\', PathToFile, 0)+1)-1)) as [ConfigFolder]   -- Endpoint (ThirdSlash - SecondSlash - 1)
+	  ,Reverse(SUBSTRING(PathToFile    -- Value
+      , charindex('\', PathToFile, charindex('\', PathToFile, 0))+1  
+      , charindex('\', PathToFile, charindex('\', PathToFile, 0)+1) - charindex('\', PathToFile, charindex('\', PathToFile, 0))-1))  as [ContractFolderType]  --  Endpoint (SecondSlash - FirstSlash - 1)
+into #ContractFolderType 					                     
+from #TempTable1 
+where CRNumber is not null
+--select * from #ContractFolderType
+
+-- Reveret file path value to original state
+
+Update #TempTable1
+Set PathToFile = REVERSE(PathToFile)
+
+Update  T
+Set T.ContractFolderType = C.ContractFolderType
+--Select * 
+from #TempTable1 T inner join 
+#ContractFolderType C
+on T.id = C.id
+
+-- Update [ConfigLoader_DeploymentItem] with the CR number 
+
+insert into [dbo].[ConfigLoader_DeploymentItem]
+(
+	   [DeploymentWorkFlowID]
+      ,[ItemId]
+      ,[ParentItemId]
+      ,[Item]
+      ,[CRNumber]
+	  ,[ContractFolderName]
+      ,[FilePath]
+      ,[CreatedBy]
+      ,[CreatDate]
+      ,[UpdateBy]
+      ,[UpdateDate]
+	  )
+	  Select @DeploymentWorkflowId, id, Parent, Text,CRNumber,ContractFolderType,PathToFile, @Createdby,GetDate(), @Createdby,GETDATE() from #TempTable1
+
+-- Clear out the staging table where files were originally captured.
+ Delete from [dbo].[ConfigLoader_TreeViewNodes]
+ 
+end 
+end
+
+USE [Development]
+GO
+/****** Object:  StoredProcedure [dbo].[PackageValidations]    Script Date: 6/13/2022 6:35:53 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+-- =============================================
+-- Author:		Faisal
+-- Create date: 
+-- Description:	
+-- =============================================
+ALTER PROCEDURE [dbo].[PackageValidations] 
+AS
+BEGIN
+	-- SET NOCOUNT ON added to prevent extra result sets from
+	-- interfering with SELECT statements.
+	SET NOCOUNT ON;
+
+	Declare
+	@DeploymentWorkflowId int, 
+	@Createdby varchar(50)
+	
+	Set @Createdby = 'thp\fs4842'
+	Set @DeploymentWorkflowId = 3
+ Begin
+
+-- Check for incorrect/incompatible files.
+IF OBJECT_ID('tempdb..#FilesWithExtension') IS NOT NULL DROP Table #FilesWithExtension
+Select * 
+--into #FilesWithExtension
+from [dbo].[ConfigLoader_DeploymentItem] 
+where Item not like '%.hrl'
+and CRNumber is not null
+
+-- Check for Config Items with no matcing CR
+select CRNumber from [dbo].[ConfigLoader_DeploymentItem] 
+where CRNumber  in (select CRNumber from [dbo].[ConfigLoader_DeploymentPlan])
+AND CRNumber is not null 
+
+-- Check for CR Items with no matching Config Items
+select CRNumber from [dbo].[ConfigLoader_DeploymentPlan]
+where CRNumber  in (select CRNumber from [dbo].[ConfigLoader_DeploymentItem])
+
+-- Check if config files match the type of the contract folder.
+select distinct * from [dbo].[ConfigLoader_DeploymentItem] 
+where Item like '%' + ContractFolderName + '%'
+
+-- Check for CR Items match the contract type
+SELECT *
+FROM [dbo].[ConfigLoader_DeploymentItem]
+WHERE Item LIKE CONCAT('%', ContractFolderName, '%')
+
+end
+END
+
+
+
